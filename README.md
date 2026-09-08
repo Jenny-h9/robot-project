@@ -48,10 +48,10 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-如果使用本仓库的 Windows 映射目录：
+本项目实际使用的 WSL 工作区为 `/home/h9/robot_ws`；在比赛 Client 容器中对应挂载路径为 `/workspace/student`：
 
 ```bash
-cd /mnt/d/ros2_ws/project
+cd /home/h9/robot_ws
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install
 source install/setup.bash
@@ -65,7 +65,19 @@ source install/setup.bash
 ros2 launch supermarket_capture capture.launch.py
 ```
 
-节点启动后会先进入 `LASER_APPROACH`。只有仿真 Server 同时运行并发布雷达、里程计和头部 RGB 图像后，才会继续完成采集。
+节点启动后会先进入锁定的 `IDLE`。解锁后，只有仿真 Server 同时运行并发布新鲜的雷达、里程计、关节状态和头部 RGB 图像，才会继续完成采集。
+
+为避免节点启动后自动运动，当前版本默认处于锁定状态。确认仿真场景和传感器就绪后，显式调用：
+
+```bash
+ros2 service call /supermarket_capture/enable std_srvs/srv/SetBool "{data: true}"
+```
+
+停止或重新锁定：
+
+```bash
+ros2 service call /supermarket_capture/enable std_srvs/srv/SetBool "{data: false}"
+```
 
 ## 使用的 ROS2 接口
 
@@ -129,6 +141,7 @@ captures/run_YYYYMMDD_HHMMSS/
 - 机器人随后沿货架方向连续移动，不在组间重复靠近。
 - `SUPERMARKET_TASKS=all` 适合 45 商品的开发压力测试；正式比赛任务数量由比赛 Server 下发，不应将 45 个货位硬编码为比赛任务。
 - 随机障碍物场景需要进一步接入完整路径规划；当前节点的固定距离移动主要用于第一阶段联调。
+- 没有新鲜有效的雷达、里程计、关节或图像数据时，节点保持零速度或等待，不使用旧缓存继续运动或拍照。
 
 ## 开发状态
 
@@ -138,4 +151,3 @@ captures/run_YYYYMMDD_HHMMSS/
 2. 发布升降柱/头部姿态控制并完成三层标定
 3. 增加 ROS2 Action Result 返回图片路径列表
 4. 基于采集并标注的图像训练兼容 `kele.pt` 的 Ultralytics YOLO 模型
-

@@ -6,6 +6,10 @@ supermarket_capture:
     level_count: 3
     connected_shelves: true
     level_heights_m: [0.50, 0.85, 1.19]
+    spine_positions_m: [0.0, 0.35, 0.69]
+    head_pitch_positions_rad: [0.0, 0.0, 0.0]
+    head_yaw_position_rad: 0.0
+    joint_tolerance: 0.03
     stop_distance: 0.75
     approach_speed: 0.10
     front_angle_deg: 10.0
@@ -14,3 +18,7 @@ supermarket_capture:
     camera_settle_time: 0.5
     approach_timeout: 60.0
     move_timeout: 30.0
+    sensor_timeout: 0.5
+    max_lateral_error: 0.12
+    max_heading_error_deg: 12.0
+    enabled: false
