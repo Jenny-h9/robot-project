@@ -130,6 +130,8 @@ class CaptureScheduler(Node):
         if stage == Stage.CAPTURE:
             self.capture_started = time.monotonic()
             self.capture_required_image_ns = self.last_image_stamp_ns
+            # 清除上一层缓存；必须等待相机送来新的 ROS 时间戳。
+            self.latest_image = None
             self.publish_level_target()
 
     def stop(self):
