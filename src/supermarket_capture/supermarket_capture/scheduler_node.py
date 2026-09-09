@@ -46,10 +46,12 @@ class CaptureScheduler(Node):
             ('spine_positions_m', [0.0, 0.35, 0.69]),
             ('head_pitch_positions_rad', [0.0, 0.0, 0.0]),
             ('head_yaw_position_rad', 0.0), ('joint_tolerance', 0.03),
+            ('level_mapping_calibrated', False), ('shelf_traverse_direction', 'left'),
             ('stop_distance', 0.75), ('approach_speed', 0.10),
             ('front_angle_deg', 10.0), ('stop_confirm_count', 3),
             ('column_spacing', 0.45), ('camera_settle_time', 0.5),
             ('joint_motion_timeout', 10.0), ('image_timeout', 3.0),
+            ('capture_timeout', 20.0),
             ('turn_speed', 0.25), ('turn_tolerance_deg', 5.0),
             ('sensor_timeout', 0.5), ('approach_timeout', 60.0),
             ('move_timeout', 30.0), ('max_lateral_error', 0.12),
@@ -84,6 +86,8 @@ class CaptureScheduler(Node):
         self.capture_pose_reached_at = None
         self.capture_image_deadline = None
         self.turn_target = None
+        self.shelf_facing_heading = None
+        self.capture_waiting_new = False
         self.paths, self.manifest = [], []
         self.failure_message = ''
         self.stage_pub = self.create_publisher(String, '/supermarket_capture/stage', 10)
@@ -128,6 +132,9 @@ class CaptureScheduler(Node):
                 self.set_stage(Stage.IDLE)
             response.success, response.message = True, '已锁定，底盘保持零速度'
         elif self.stage == Stage.IDLE:
+            if not bool(self.get_parameter('level_mapping_calibrated').value):
+                response.success, response.message = False, '三层高度映射尚未完成仿真标定，拒绝解锁'
+                return response
             self.failure_message = ''
             self.scan_close_count = 0
             self.move_origin = self.move_heading = None
@@ -152,6 +159,7 @@ class CaptureScheduler(Node):
             self.capture_required_image_ns = self.last_image_stamp_ns
             # 清除上一层缓存；必须等待相机送来新的 ROS 时间戳。
             self.latest_image = None
+            self.capture_waiting_new = False
             self.publish_level_target()
 
     def stop(self):
@@ -186,6 +194,8 @@ class CaptureScheduler(Node):
         elif self.stage == Stage.CAPTURE:
             self.stop()
             now = time.monotonic()
+            if now - self.capture_started > float(self.get_parameter('capture_timeout').value):
+                self.fail('CAPTURE 阶段总超时'); return
             if now - self.capture_started > float(self.get_parameter('joint_motion_timeout').value) and self.capture_pose_reached_at is None:
                 self.fail('关节到位超时'); return
             if not self.sensors_fresh(True) or not self.joints_at_level():
@@ -193,6 +203,12 @@ class CaptureScheduler(Node):
             if self.capture_pose_reached_at is None:
                 self.capture_pose_reached_at = now; self.capture_image_deadline = now + float(self.get_parameter('image_timeout').value); return
             if now - self.capture_pose_reached_at < float(self.get_parameter('camera_settle_time').value): return
+            if not self.capture_waiting_new:
+                self.latest_image = None
+                self.capture_required_image_ns = self.last_image_stamp_ns
+                self.capture_waiting_new = True
+                self.capture_image_deadline = now + float(self.get_parameter('image_timeout').value)
+                return
             if self.latest_image is None or stamp_ns(self.latest_image.header.stamp) <= self.capture_required_image_ns:
                 if now > self.capture_image_deadline: self.fail('稳定后未收到新图像')
                 return
@@ -201,7 +217,10 @@ class CaptureScheduler(Node):
                 self.level += 1; self.set_stage(Stage.CAPTURE)
             elif self.global_column + 1 < self.total_columns:
                 self.level = 0
-                self.turn_target = self.normalize_angle(self.yaw_from_odom(self.latest_odom) + math.pi / 2.0)
+                self.shelf_facing_heading = self.yaw_from_odom(self.latest_odom)
+                direction = str(self.get_parameter('shelf_traverse_direction').value).lower()
+                turn_sign = 1.0 if direction == 'left' else -1.0
+                self.turn_target = self.normalize_angle(self.shelf_facing_heading + turn_sign * math.pi / 2.0)
                 self.set_stage(Stage.TURN_LEFT)
             else:
                 self.finish()
@@ -217,7 +236,9 @@ class CaptureScheduler(Node):
                 else:
                     self.global_column += 1; self.shelf = self.global_column // self.column_count if self.connected_shelves else 0; self.column = self.global_column % self.column_count; self.move_origin = self.move_heading = None; self.set_stage(Stage.CAPTURE)
             else:
-                cmd = Twist(); cmd.angular.z = float(self.get_parameter('turn_speed').value) * (1.0 if self.stage == Stage.TURN_LEFT else -1.0); self.cmd_pub.publish(cmd)
+                direction = str(self.get_parameter('shelf_traverse_direction').value).lower()
+                left_sign = 1.0 if direction == 'left' else -1.0
+                cmd = Twist(); cmd.angular.z = float(self.get_parameter('turn_speed').value) * (left_sign if self.stage == Stage.TURN_LEFT else -left_sign); self.cmd_pub.publish(cmd)
         elif self.stage == Stage.MOVE_LATERAL:
             if time.monotonic() - self.stage_started > float(self.get_parameter('move_timeout').value): self.fail('横向移动超时'); return
             if not self.sensors_fresh(): self.stop(); return
@@ -229,10 +250,12 @@ class CaptureScheduler(Node):
             dx, dy = p.x - self.move_origin.x, p.y - self.move_origin.y
             forward = dx * math.cos(self.move_heading) + dy * math.sin(self.move_heading)
             lateral = abs(-dx * math.sin(self.move_heading) + dy * math.cos(self.move_heading))
-            if lateral > float(self.get_parameter('max_lateral_error').value) or forward < -0.05:
+            if self.front_distance_value <= float(self.get_parameter('emergency_stop_distance').value):
+                self.fail('横移时前方障碍物进入紧急停车距离')
+            elif lateral > float(self.get_parameter('max_lateral_error').value) or forward < -0.05:
                 self.fail('移动方向不符合预期')
             elif forward >= float(self.get_parameter('column_spacing').value):
-                self.stop(); self.turn_target = self.normalize_angle(self.yaw_from_odom(self.latest_odom) - math.pi / 2.0); self.set_stage(Stage.TURN_RIGHT)
+                self.stop(); self.turn_target = self.shelf_facing_heading; self.set_stage(Stage.TURN_RIGHT)
             else:
                 cmd = Twist(); cmd.linear.x = float(self.get_parameter('approach_speed').value); self.cmd_pub.publish(cmd)
 

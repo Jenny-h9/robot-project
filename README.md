@@ -142,6 +142,8 @@ captures/run_YYYYMMDD_HHMMSS/
 - `SUPERMARKET_TASKS=all` 适合 45 商品的开发压力测试；正式比赛任务数量由比赛 Server 下发，不应将 45 个货位硬编码为比赛任务。
 - 随机障碍物场景需要进一步接入完整路径规划；当前节点的固定距离移动主要用于第一阶段联调。
 - 没有新鲜有效的雷达、里程计、关节或图像数据时，节点保持零速度或等待，不使用旧缓存继续运动或拍照。
+- 层高映射默认未标定（`level_mapping_calibrated: false`），未完成仿真标定前不会接受解锁请求。
+- 横移方向由 `shelf_traverse_direction` 配置为 `left` 或 `right`；横移时若正前方距离小于 `emergency_stop_distance`，立即进入错误状态。
 
 ## 开发状态
 
