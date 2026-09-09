@@ -1,0 +1,33 @@
+supermarket_capture:
+  ros__parameters:
+    output_dir: "captures"
+    shelf_count: 5
+    column_count: 3
+    level_count: 3
+    connected_shelves: true
+    level_heights_m: [0.50, 0.85, 1.19]
+    # 目标高度 0.50/0.85/1.19m 对应 axis="0 0 -1" 的反向升降值
+    spine_positions_m: [0.69, 0.35, 0.00]
+    head_pitch_positions_rad: [0.0, 0.0, 0.0]
+    head_yaw_position_rad: 0.0
+    joint_tolerance: 0.03
+    level_mapping_calibrated: true
+    shelf_traverse_direction: left
+    stop_distance: 0.75
+    approach_speed: 0.10
+    front_angle_deg: 10.0
+    stop_confirm_count: 3
+    column_spacing: 0.45
+    camera_settle_time: 0.5
+    approach_timeout: 60.0
+    move_timeout: 30.0
+    sensor_timeout: 0.5
+    max_lateral_error: 0.12
+    max_heading_error_deg: 12.0
+    enabled: false
+    joint_motion_timeout: 10.0
+    image_timeout: 3.0
+    turn_speed: 0.25
+    turn_tolerance_deg: 5.0
+    emergency_stop_distance: 0.30
+    capture_timeout: 20.0
