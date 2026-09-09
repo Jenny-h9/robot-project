@@ -14,7 +14,7 @@ supermarket_capture:
     level_mapping_calibrated: true
     shelf_traverse_direction: left
     stop_distance: 0.75
-    approach_speed: 0.80
+    approach_speed: 0.08
     approach_brake_distance: 1.50
     approach_emergency_distance: 0.35
     front_angle_deg: 20.0
@@ -26,10 +26,11 @@ supermarket_capture:
     sensor_timeout: 0.5
     max_lateral_error: 0.12
     max_heading_error_deg: 12.0
-    enabled: true
+    enabled: false
     joint_motion_timeout: 10.0
     image_timeout: 3.0
     turn_speed: 0.30
     turn_tolerance_deg: 5.0
     emergency_stop_distance: 0.30
     capture_timeout: 20.0
+    max_approach_distance: 3.0
