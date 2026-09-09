@@ -48,7 +48,8 @@ class CaptureScheduler(Node):
             ('head_yaw_position_rad', 0.0), ('joint_tolerance', 0.03),
             ('level_mapping_calibrated', False), ('shelf_traverse_direction', 'left'),
             ('stop_distance', 0.75), ('approach_speed', 0.80),
-            ('front_angle_deg', 10.0), ('stop_confirm_count', 3),
+            ('approach_brake_distance', 1.50), ('approach_emergency_distance', 0.35),
+            ('front_angle_deg', 20.0), ('stop_confirm_count', 3),
             ('column_spacing', 0.45), ('camera_settle_time', 0.5),
             ('joint_motion_timeout', 10.0), ('image_timeout', 3.0),
             ('capture_timeout', 20.0),
@@ -209,7 +210,16 @@ class CaptureScheduler(Node):
             elif self.scan_close_count >= int(self.get_parameter('stop_confirm_count').value):
                 self.stop(); self.set_stage(Stage.CAPTURE)
             else:
-                cmd = Twist(); cmd.linear.x = float(self.get_parameter('approach_speed').value); self.cmd_pub.publish(cmd)
+                # 高速远距离靠近，进入刹车区后线性降速，减少控制延迟造成的冲过停车点。
+                distance = self.front_distance_value
+                if self.front_min_distance_value is not None and self.front_min_distance_value <= float(self.get_parameter('approach_emergency_distance').value):
+                    self.fail('靠近阶段前方进入紧急停车距离'); return
+                brake = float(self.get_parameter('approach_brake_distance').value)
+                speed = float(self.get_parameter('approach_speed').value)
+                if distance is not None and distance < brake:
+                    stop_distance = float(self.get_parameter('stop_distance').value)
+                    speed = 0.0 if distance <= stop_distance else speed * (distance - stop_distance) / max(0.01, brake - stop_distance)
+                cmd = Twist(); cmd.linear.x = min(speed, float(self.get_parameter('approach_speed').value)); self.cmd_pub.publish(cmd)
         elif self.stage == Stage.CAPTURE:
             self.stop()
             now = time.monotonic()
