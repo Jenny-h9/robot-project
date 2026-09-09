@@ -15,7 +15,6 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from sensor_msgs.msg import Image, JointState, LaserScan
 from std_msgs.msg import Float64MultiArray, String
-from std_srvs.srv import SetBool
 
 
 class Stage:
@@ -59,7 +58,7 @@ class CaptureScheduler(Node):
             ('sensor_timeout', 0.5), ('approach_timeout', 60.0),
             ('max_approach_distance', 3.0),
             ('move_timeout', 30.0), ('max_lateral_error', 0.12),
-            ('max_heading_error_deg', 12.0), ('enabled', False),
+            ('max_heading_error_deg', 12.0), ('enabled', True),
         ])
         self.shelf_count = int(self.get_parameter('shelf_count').value)
         self.column_count = int(self.get_parameter('column_count').value)
@@ -113,11 +112,14 @@ class CaptureScheduler(Node):
         self.create_subscription(Odometry, '/slamware_ros_sdk_server_node/odom', self.odom_cb, 10)
         self.create_subscription(Image, '/head_camera/color/image_raw', self.image_cb, 10)
         self.create_subscription(JointState, '/joint_states', self.joint_cb, 10)
-        self.create_service(SetBool, '/supermarket_capture/enable', self.enable_cb)
         self.timer = self.create_timer(0.1, self.tick)
         self.set_stage(Stage.IDLE)
-        self.enabled = False
-        self.get_logger().info('locked: call /supermarket_capture/enable with data=true to start')
+        if self.enabled and bool(self.get_parameter('level_mapping_calibrated').value):
+            self.set_stage(Stage.APPROACH)
+            self.get_logger().info('auto-start enabled; sensor safety checks remain active')
+        else:
+            self.enabled = False
+            self.get_logger().error('level mapping is not calibrated; refusing to move')
 
     def scan_cb(self, msg):
         now = time.monotonic()
@@ -137,31 +139,6 @@ class CaptureScheduler(Node):
 
     def joint_cb(self, msg):
         self.latest_joints, self.last_joint_mono = msg, time.monotonic()
-
-    def enable_cb(self, request, response):
-        self.enabled = bool(request.data)
-        if not self.enabled:
-            self.stop()
-            if self.stage not in (Stage.FINISHED, Stage.ERROR, Stage.INTERRUPTED, Stage.IDLE):
-                self.failure_message = '用户锁定，中止本次任务；请重启节点后重新开始'
-                self.set_stage(Stage.INTERRUPTED); self.write_manifest()
-            elif self.stage == Stage.IDLE:
-                self.set_stage(Stage.IDLE)
-            response.success, response.message = True, '已锁定，底盘保持零速度'
-        elif self.stage == Stage.IDLE:
-            if not bool(self.get_parameter('level_mapping_calibrated').value):
-                response.success, response.message = False, '三层高度映射尚未完成仿真标定，拒绝解锁'
-                return response
-            self.failure_message = ''
-            self.scan_close_count = 0
-            self.move_origin = self.move_heading = None
-            self.last_scan_stamp_ns = 0
-            self.approach_origin = None
-            self.set_stage(Stage.APPROACH)
-            response.success, response.message = True, '已解锁，等待新鲜有效雷达数据'
-        else:
-            response.success, response.message = False, f'当前状态 {self.stage} 不允许启动'
-        return response
 
     def set_stage(self, stage):
         self.stage, self.stage_started = stage, time.monotonic()
