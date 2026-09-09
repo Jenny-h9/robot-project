@@ -53,6 +53,7 @@ class CaptureScheduler(Node):
             ('joint_motion_timeout', 10.0), ('image_timeout', 3.0),
             ('capture_timeout', 20.0),
             ('turn_speed', 0.25), ('turn_tolerance_deg', 5.0),
+            ('emergency_stop_distance', 0.30),
             ('sensor_timeout', 0.5), ('approach_timeout', 60.0),
             ('move_timeout', 30.0), ('max_lateral_error', 0.12),
             ('max_heading_error_deg', 12.0), ('enabled', False),
