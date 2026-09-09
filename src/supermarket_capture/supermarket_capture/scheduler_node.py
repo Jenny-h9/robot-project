@@ -22,8 +22,12 @@ class Stage:
     APPROACH = 'LASER_APPROACH'
     CAPTURE = 'CAPTURE'
     MOVE_NEXT = 'MOVE_NEXT_COLUMN'
+    TURN_LEFT = 'TURN_LEFT_90'
+    MOVE_LATERAL = 'MOVE_LATERAL'
+    TURN_RIGHT = 'TURN_RIGHT_90'
     FINISHED = 'FINISHED'
     ERROR = 'ERROR'
+    INTERRUPTED = 'INTERRUPTED'
 
 
 def stamp_ns(stamp):
@@ -45,6 +49,8 @@ class CaptureScheduler(Node):
             ('stop_distance', 0.75), ('approach_speed', 0.10),
             ('front_angle_deg', 10.0), ('stop_confirm_count', 3),
             ('column_spacing', 0.45), ('camera_settle_time', 0.5),
+            ('joint_motion_timeout', 10.0), ('image_timeout', 3.0),
+            ('turn_speed', 0.25), ('turn_tolerance_deg', 5.0),
             ('sensor_timeout', 0.5), ('approach_timeout', 60.0),
             ('move_timeout', 30.0), ('max_lateral_error', 0.12),
             ('max_heading_error_deg', 12.0), ('enabled', False),
@@ -75,6 +81,9 @@ class CaptureScheduler(Node):
         self.move_origin = self.move_heading = None
         self.capture_required_image_ns = 0
         self.capture_started = 0.0
+        self.capture_pose_reached_at = None
+        self.capture_image_deadline = None
+        self.turn_target = None
         self.paths, self.manifest = [], []
         self.failure_message = ''
         self.stage_pub = self.create_publisher(String, '/supermarket_capture/stage', 10)
@@ -112,11 +121,17 @@ class CaptureScheduler(Node):
         self.enabled = bool(request.data)
         if not self.enabled:
             self.stop()
-            if self.stage not in (Stage.FINISHED, Stage.ERROR):
+            if self.stage not in (Stage.FINISHED, Stage.ERROR, Stage.INTERRUPTED, Stage.IDLE):
+                self.failure_message = '用户锁定，中止本次任务；请重启节点后重新开始'
+                self.set_stage(Stage.INTERRUPTED); self.write_manifest(); self.timer.cancel()
+            elif self.stage == Stage.IDLE:
                 self.set_stage(Stage.IDLE)
             response.success, response.message = True, '已锁定，底盘保持零速度'
         elif self.stage == Stage.IDLE:
             self.failure_message = ''
+            self.scan_close_count = 0
+            self.move_origin = self.move_heading = None
+            self.last_scan_stamp_ns = 0
             self.set_stage(Stage.APPROACH)
             response.success, response.message = True, '已解锁，等待新鲜有效雷达数据'
         else:
@@ -125,17 +140,25 @@ class CaptureScheduler(Node):
 
     def set_stage(self, stage):
         self.stage, self.stage_started = stage, time.monotonic()
-        self.stage_pub.publish(String(data=stage))
+        try:
+            self.stage_pub.publish(String(data=stage))
+        except Exception:
+            pass
         self.get_logger().info(f'stage={stage} shelf={self.shelf + 1} column={self.column + 1} level={self.level + 1}')
         if stage == Stage.CAPTURE:
             self.capture_started = time.monotonic()
+            self.capture_pose_reached_at = None
+            self.capture_image_deadline = self.capture_started + float(self.get_parameter('image_timeout').value)
             self.capture_required_image_ns = self.last_image_stamp_ns
             # 清除上一层缓存；必须等待相机送来新的 ROS 时间戳。
             self.latest_image = None
             self.publish_level_target()
 
     def stop(self):
-        self.cmd_pub.publish(Twist())
+        try:
+            self.cmd_pub.publish(Twist())
+        except Exception:
+            pass
 
     def _front_distance(self, scan):
         half = math.radians(float(self.get_parameter('front_angle_deg').value))
@@ -152,32 +175,55 @@ class CaptureScheduler(Node):
         if not self.enabled:
             self.stop(); return
         if self.stage == Stage.APPROACH:
-            if not self.sensors_fresh():
-                self.stop()
-            elif time.monotonic() - self.stage_started > float(self.get_parameter('approach_timeout').value):
+            if time.monotonic() - self.stage_started > float(self.get_parameter('approach_timeout').value):
                 self.fail('激光靠近超时')
+            elif not self.sensors_fresh():
+                self.stop()
             elif self.scan_close_count >= int(self.get_parameter('stop_confirm_count').value):
                 self.stop(); self.set_stage(Stage.CAPTURE)
             else:
                 cmd = Twist(); cmd.linear.x = float(self.get_parameter('approach_speed').value); self.cmd_pub.publish(cmd)
         elif self.stage == Stage.CAPTURE:
             self.stop()
-            if time.monotonic() - self.capture_started < float(self.get_parameter('camera_settle_time').value) or not self.sensors_fresh(True) or not self.joints_at_level():
+            now = time.monotonic()
+            if now - self.capture_started > float(self.get_parameter('joint_motion_timeout').value) and self.capture_pose_reached_at is None:
+                self.fail('关节到位超时'); return
+            if not self.sensors_fresh(True) or not self.joints_at_level():
                 return
+            if self.capture_pose_reached_at is None:
+                self.capture_pose_reached_at = now; self.capture_image_deadline = now + float(self.get_parameter('image_timeout').value); return
+            if now - self.capture_pose_reached_at < float(self.get_parameter('camera_settle_time').value): return
             if self.latest_image is None or stamp_ns(self.latest_image.header.stamp) <= self.capture_required_image_ns:
+                if now > self.capture_image_deadline: self.fail('稳定后未收到新图像')
                 return
             if not self.save_image(): return
             if self.level + 1 < self.level_count:
                 self.level += 1; self.set_stage(Stage.CAPTURE)
             elif self.global_column + 1 < self.total_columns:
-                self.level = 0; self.set_stage(Stage.MOVE_NEXT)
+                self.level = 0
+                self.turn_target = self.normalize_angle(self.yaw_from_odom(self.latest_odom) + math.pi / 2.0)
+                self.set_stage(Stage.TURN_LEFT)
             else:
                 self.finish()
-        elif self.stage == Stage.MOVE_NEXT:
+        elif self.stage in (Stage.TURN_LEFT, Stage.TURN_RIGHT):
+            if time.monotonic() - self.stage_started > float(self.get_parameter('move_timeout').value): self.fail('转向超时'); return
+            if not self.sensors_fresh(): self.stop(); return
+            yaw = self.yaw_from_odom(self.latest_odom)
+            err = math.atan2(math.sin(self.turn_target - yaw), math.cos(self.turn_target - yaw))
+            if abs(math.degrees(err)) <= float(self.get_parameter('turn_tolerance_deg').value):
+                self.stop()
+                if self.stage == Stage.TURN_LEFT:
+                    self.move_origin = None; self.move_heading = yaw; self.set_stage(Stage.MOVE_LATERAL)
+                else:
+                    self.global_column += 1; self.shelf = self.global_column // self.column_count if self.connected_shelves else 0; self.column = self.global_column % self.column_count; self.move_origin = self.move_heading = None; self.set_stage(Stage.CAPTURE)
+            else:
+                cmd = Twist(); cmd.angular.z = float(self.get_parameter('turn_speed').value) * (1.0 if self.stage == Stage.TURN_LEFT else -1.0); self.cmd_pub.publish(cmd)
+        elif self.stage == Stage.MOVE_LATERAL:
+            if time.monotonic() - self.stage_started > float(self.get_parameter('move_timeout').value): self.fail('横向移动超时'); return
             if not self.sensors_fresh(): self.stop(); return
             if self.move_origin is None:
                 self.move_origin = self.latest_odom.pose.pose.position
-                self.move_heading = self.yaw_from_odom(self.latest_odom)
+                # move_heading 在左转完成时已保存为货架横向方向。
             if not self.odom_direction_ok(): self.fail('里程计方向/航向偏差超限'); return
             p = self.latest_odom.pose.pose.position
             dx, dy = p.x - self.move_origin.x, p.y - self.move_origin.y
@@ -186,12 +232,7 @@ class CaptureScheduler(Node):
             if lateral > float(self.get_parameter('max_lateral_error').value) or forward < -0.05:
                 self.fail('移动方向不符合预期')
             elif forward >= float(self.get_parameter('column_spacing').value):
-                self.stop(); self.global_column += 1
-                self.shelf = self.global_column // self.column_count if self.connected_shelves else 0
-                self.column = self.global_column % self.column_count
-                self.move_origin = self.move_heading = None; self.set_stage(Stage.CAPTURE)
-            elif time.monotonic() - self.stage_started > float(self.get_parameter('move_timeout').value):
-                self.fail('列间移动超时')
+                self.stop(); self.turn_target = self.normalize_angle(self.yaw_from_odom(self.latest_odom) - math.pi / 2.0); self.set_stage(Stage.TURN_RIGHT)
             else:
                 cmd = Twist(); cmd.linear.x = float(self.get_parameter('approach_speed').value); self.cmd_pub.publish(cmd)
 
@@ -204,6 +245,10 @@ class CaptureScheduler(Node):
         if self.latest_odom is None or self.move_heading is None: return False
         err = math.atan2(math.sin(self.yaw_from_odom(self.latest_odom) - self.move_heading), math.cos(self.yaw_from_odom(self.latest_odom) - self.move_heading))
         return abs(math.degrees(err)) <= float(self.get_parameter('max_heading_error_deg').value)
+
+    @staticmethod
+    def normalize_angle(angle):
+        return math.atan2(math.sin(angle), math.cos(angle))
 
     def publish_level_target(self):
         self.spine_pub.publish(Float64MultiArray(data=[self.spine_positions[self.level]]))
@@ -246,8 +291,12 @@ def main(args=None):
         rclpy.spin(node)
     except KeyboardInterrupt:
         node.get_logger().info('收到中断，保存部分 manifest')
+        node.failure_message = '用户 Ctrl+C 中断任务'
+        node.stage = Stage.INTERRUPTED
     finally:
-        node.stop(); node.write_manifest(); node.destroy_node(); rclpy.shutdown()
+        node.stop(); node.write_manifest(); node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
