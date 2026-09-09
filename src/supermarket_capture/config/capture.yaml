@@ -15,7 +15,9 @@ supermarket_capture:
     shelf_traverse_direction: left
     stop_distance: 0.75
     approach_speed: 0.80
-    front_angle_deg: 10.0
+    approach_brake_distance: 1.50
+    approach_emergency_distance: 0.35
+    front_angle_deg: 20.0
     stop_confirm_count: 3
     column_spacing: 0.45
     camera_settle_time: 0.5
