@@ -47,16 +47,16 @@ class CaptureScheduler(Node):
             ('head_pitch_positions_rad', [0.0, 0.0, 0.0]),
             ('head_yaw_position_rad', 0.0), ('joint_tolerance', 0.03),
             ('level_mapping_calibrated', False), ('shelf_traverse_direction', 'left'),
-            ('stop_distance', 0.75), ('approach_speed', 0.10),
+            ('stop_distance', 0.75), ('approach_speed', 0.80),
             ('front_angle_deg', 10.0), ('stop_confirm_count', 3),
             ('column_spacing', 0.45), ('camera_settle_time', 0.5),
             ('joint_motion_timeout', 10.0), ('image_timeout', 3.0),
             ('capture_timeout', 20.0),
-            ('turn_speed', 0.25), ('turn_tolerance_deg', 5.0),
+            ('turn_speed', 0.30), ('turn_tolerance_deg', 5.0),
             ('emergency_stop_distance', 0.30),
             ('sensor_timeout', 0.5), ('approach_timeout', 60.0),
             ('move_timeout', 30.0), ('max_lateral_error', 0.12),
-            ('max_heading_error_deg', 12.0), ('enabled', False),
+            ('max_heading_error_deg', 12.0), ('enabled', True),
         ])
         self.shelf_count = int(self.get_parameter('shelf_count').value)
         self.column_count = int(self.get_parameter('column_count').value)
@@ -109,7 +109,12 @@ class CaptureScheduler(Node):
         self.create_service(SetBool, '/supermarket_capture/enable', self.enable_cb)
         self.timer = self.create_timer(0.1, self.tick)
         self.set_stage(Stage.IDLE)
-        self.get_logger().info('locked: call /supermarket_capture/enable with data=true to start')
+        if self.enabled and bool(self.get_parameter('level_mapping_calibrated').value):
+            self.set_stage(Stage.APPROACH)
+            self.get_logger().info('auto-start enabled; safety checks remain active')
+        else:
+            self.enabled = False
+            self.get_logger().info('locked: level mapping is not calibrated')
 
     def scan_cb(self, msg):
         now = time.monotonic()

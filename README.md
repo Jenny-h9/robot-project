@@ -65,19 +65,15 @@ source install/setup.bash
 ros2 launch supermarket_capture capture.launch.py
 ```
 
-节点启动后会先进入锁定的 `IDLE`。解锁后，只有仿真 Server 同时运行并发布新鲜的雷达、里程计、关节状态和头部 RGB 图像，才会继续完成采集。
+节点启动后默认自动进入 `LASER_APPROACH`。即使自动启动，只有仿真 Server 同时运行并发布新鲜的雷达、里程计、关节状态和头部 RGB 图像，才会继续运动。
 
-为避免节点启动后自动运动，当前版本默认处于锁定状态。确认仿真场景和传感器就绪后，显式调用：
-
-```bash
-ros2 service call /supermarket_capture/enable std_srvs/srv/SetBool "{data: true}"
-```
-
-停止或重新锁定：
+如需在运行中立即停止，可显式锁定：
 
 ```bash
 ros2 service call /supermarket_capture/enable std_srvs/srv/SetBool "{data: false}"
 ```
+
+重新启动任务需重启节点后自动开始；不会从中断现场续跑。
 
 ## 使用的 ROS2 接口
 
@@ -112,9 +108,10 @@ ERROR
 
 ```yaml
 stop_distance: 0.75
-approach_speed: 0.10
+approach_speed: 0.80
 stop_confirm_count: 3
 column_spacing: 0.45
+turn_speed: 0.30
 level_heights_m: [0.50, 0.85, 1.19]
 camera_settle_time: 0.5
 ```
