@@ -65,15 +65,7 @@ source install/setup.bash
 ros2 launch supermarket_capture capture.launch.py
 ```
 
-节点启动后默认自动进入 `LASER_APPROACH`。即使自动启动，只有仿真 Server 同时运行并发布新鲜的雷达、里程计、关节状态和头部 RGB 图像，才会继续运动。
-
-如需在运行中立即停止，可显式锁定：
-
-```bash
-ros2 service call /supermarket_capture/enable std_srvs/srv/SetBool "{data: false}"
-```
-
-重新启动任务需重启节点后自动开始；不会从中断现场续跑。
+节点启动后默认自动进入 `LASER_APPROACH`。即使自动启动，只有仿真 Server 同时运行并发布新鲜的雷达、里程计、关节状态和头部 RGB 图像，才会继续运动。发生异常时节点自动停止并进入错误状态；重新开始任务需要重启节点。
 
 ## 使用的 ROS2 接口
 

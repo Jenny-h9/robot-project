@@ -2,6 +2,7 @@
 
 import json
 import math
+import csv
 import time
 from datetime import datetime
 from pathlib import Path
@@ -14,7 +15,6 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from sensor_msgs.msg import Image, JointState, LaserScan
 from std_msgs.msg import Float64MultiArray, String
-from std_srvs.srv import SetBool
 
 
 class Stage:
@@ -47,7 +47,7 @@ class CaptureScheduler(Node):
             ('head_pitch_positions_rad', [0.0, 0.0, 0.0]),
             ('head_yaw_position_rad', 0.0), ('joint_tolerance', 0.03),
             ('level_mapping_calibrated', False), ('shelf_traverse_direction', 'left'),
-            ('stop_distance', 0.75), ('approach_speed', 0.80),
+            ('stop_distance', 0.75), ('approach_speed', 0.08),
             ('approach_brake_distance', 1.50), ('approach_emergency_distance', 0.35),
             ('front_angle_deg', 20.0), ('stop_confirm_count', 3),
             ('column_spacing', 0.45), ('camera_settle_time', 0.5),
@@ -56,6 +56,7 @@ class CaptureScheduler(Node):
             ('turn_speed', 0.30), ('turn_tolerance_deg', 5.0),
             ('emergency_stop_distance', 0.30),
             ('sensor_timeout', 0.5), ('approach_timeout', 60.0),
+            ('max_approach_distance', 3.0),
             ('move_timeout', 30.0), ('max_lateral_error', 0.12),
             ('max_heading_error_deg', 12.0), ('enabled', True),
         ])
@@ -99,6 +100,10 @@ class CaptureScheduler(Node):
         self.capture_waiting_new = False
         self.paths, self.manifest = [], []
         self.failure_message = ''
+        self.approach_origin = None
+        self.control_log = self.run_dir / 'control_log.csv'
+        with self.control_log.open('w', newline='', encoding='utf-8') as stream:
+            csv.writer(stream).writerow(['time', 'stage', 'front_median_m', 'front_min_m', 'odom_x', 'odom_y', 'yaw_rad', 'cmd_linear_x', 'cmd_angular_z'])
         self.stage_pub = self.create_publisher(String, '/supermarket_capture/stage', 10)
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.spine_pub = self.create_publisher(Float64MultiArray, '/spine_forward_position_controller/commands', 10)
@@ -107,15 +112,14 @@ class CaptureScheduler(Node):
         self.create_subscription(Odometry, '/slamware_ros_sdk_server_node/odom', self.odom_cb, 10)
         self.create_subscription(Image, '/head_camera/color/image_raw', self.image_cb, 10)
         self.create_subscription(JointState, '/joint_states', self.joint_cb, 10)
-        self.create_service(SetBool, '/supermarket_capture/enable', self.enable_cb)
         self.timer = self.create_timer(0.1, self.tick)
         self.set_stage(Stage.IDLE)
         if self.enabled and bool(self.get_parameter('level_mapping_calibrated').value):
             self.set_stage(Stage.APPROACH)
-            self.get_logger().info('auto-start enabled; safety checks remain active')
+            self.get_logger().info('auto-start enabled; sensor safety checks remain active')
         else:
             self.enabled = False
-            self.get_logger().info('locked: level mapping is not calibrated')
+            self.get_logger().error('level mapping is not calibrated; refusing to move')
 
     def scan_cb(self, msg):
         now = time.monotonic()
@@ -136,30 +140,6 @@ class CaptureScheduler(Node):
     def joint_cb(self, msg):
         self.latest_joints, self.last_joint_mono = msg, time.monotonic()
 
-    def enable_cb(self, request, response):
-        self.enabled = bool(request.data)
-        if not self.enabled:
-            self.stop()
-            if self.stage not in (Stage.FINISHED, Stage.ERROR, Stage.INTERRUPTED, Stage.IDLE):
-                self.failure_message = '用户锁定，中止本次任务；请重启节点后重新开始'
-                self.set_stage(Stage.INTERRUPTED); self.write_manifest()
-            elif self.stage == Stage.IDLE:
-                self.set_stage(Stage.IDLE)
-            response.success, response.message = True, '已锁定，底盘保持零速度'
-        elif self.stage == Stage.IDLE:
-            if not bool(self.get_parameter('level_mapping_calibrated').value):
-                response.success, response.message = False, '三层高度映射尚未完成仿真标定，拒绝解锁'
-                return response
-            self.failure_message = ''
-            self.scan_close_count = 0
-            self.move_origin = self.move_heading = None
-            self.last_scan_stamp_ns = 0
-            self.set_stage(Stage.APPROACH)
-            response.success, response.message = True, '已解锁，等待新鲜有效雷达数据'
-        else:
-            response.success, response.message = False, f'当前状态 {self.stage} 不允许启动'
-        return response
-
     def set_stage(self, stage):
         self.stage, self.stage_started = stage, time.monotonic()
         try:
@@ -176,6 +156,8 @@ class CaptureScheduler(Node):
             self.latest_image = None
             self.capture_waiting_new = False
             self.publish_level_target()
+        elif stage == Stage.APPROACH:
+            self.approach_origin = None
 
     def stop(self):
         try:
@@ -207,6 +189,14 @@ class CaptureScheduler(Node):
                 self.fail('激光靠近超时')
             elif not self.sensors_fresh():
                 self.stop()
+            elif self.approach_origin is None:
+                self.approach_origin = self.latest_odom.pose.pose.position
+            elif self.front_min_distance_value <= float(self.get_parameter('emergency_stop_distance').value):
+                self.fail('靠近阶段单帧触发前向紧急停车'); return
+            elif self.approach_origin is not None and self.latest_odom is not None:
+                p = self.latest_odom.pose.pose.position
+                if math.hypot(p.x - self.approach_origin.x, p.y - self.approach_origin.y) > float(self.get_parameter('max_approach_distance').value):
+                    self.fail('靠近阶段超过最大前进距离'); return
             elif self.scan_close_count >= int(self.get_parameter('stop_confirm_count').value):
                 self.stop(); self.set_stage(Stage.CAPTURE)
             else:
@@ -219,7 +209,7 @@ class CaptureScheduler(Node):
                 if distance is not None and distance < brake:
                     stop_distance = float(self.get_parameter('stop_distance').value)
                     speed = 0.0 if distance <= stop_distance else speed * (distance - stop_distance) / max(0.01, brake - stop_distance)
-                cmd = Twist(); cmd.linear.x = min(speed, float(self.get_parameter('approach_speed').value)); self.cmd_pub.publish(cmd)
+                cmd = Twist(); cmd.linear.x = min(speed, float(self.get_parameter('approach_speed').value)); self.cmd_pub.publish(cmd); self.log_control(cmd)
         elif self.stage == Stage.CAPTURE:
             self.stop()
             now = time.monotonic()
@@ -290,7 +280,7 @@ class CaptureScheduler(Node):
             elif forward >= float(self.get_parameter('column_spacing').value):
                 self.stop(); self.turn_target = self.shelf_facing_heading; self.set_stage(Stage.TURN_RIGHT)
             else:
-                cmd = Twist(); cmd.linear.x = float(self.get_parameter('approach_speed').value); self.cmd_pub.publish(cmd)
+                cmd = Twist(); cmd.linear.x = float(self.get_parameter('approach_speed').value); self.cmd_pub.publish(cmd); self.log_control(cmd)
 
     @staticmethod
     def yaw_from_odom(odom):
@@ -309,6 +299,13 @@ class CaptureScheduler(Node):
     def publish_level_target(self):
         self.spine_pub.publish(Float64MultiArray(data=[self.spine_positions[self.level]]))
         self.head_pub.publish(Float64MultiArray(data=[float(self.get_parameter('head_yaw_position_rad').value), self.head_pitch_positions[self.level]]))
+        self.get_logger().info(f'level target height={self.level_heights_m[self.level]:.2f}m spine={self.spine_positions[self.level]:.2f}m pitch={self.head_pitch_positions[self.level]:.3f}rad')
+
+    def log_control(self, cmd):
+        p = self.latest_odom.pose.pose.position if self.latest_odom else None
+        yaw = self.yaw_from_odom(self.latest_odom) if self.latest_odom else None
+        with self.control_log.open('a', newline='', encoding='utf-8') as stream:
+            csv.writer(stream).writerow([time.time(), self.stage, self.front_distance_value, self.front_min_distance_value, p.x if p else None, p.y if p else None, yaw, cmd.linear.x, cmd.angular.z])
 
     def joints_at_level(self):
         if self.latest_joints is None: return False
