@@ -1,0 +1,16 @@
+supermarket_capture:
+  ros__parameters:
+    output_dir: "captures"
+    shelf_count: 5
+    column_count: 3
+    level_count: 3
+    connected_shelves: true
+    level_heights_m: [0.50, 0.85, 1.19]
+    stop_distance: 0.75
+    approach_speed: 0.10
+    front_angle_deg: 10.0
+    stop_confirm_count: 3
+    column_spacing: 0.45
+    camera_settle_time: 0.5
+    approach_timeout: 60.0
+    move_timeout: 30.0

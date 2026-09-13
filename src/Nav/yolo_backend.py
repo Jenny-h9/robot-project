@@ -7,7 +7,11 @@ import numpy as np
 
 
 class YoloBackend:
-    CLASS_NAMES = ["chengzi", "heweidao", "kele", "kouxiangtang", "maidong", "pinguo", "sanmingzhi", "shupian", "zhijin"]
+    # Class order must match the trained checkpoint.  ``pingguo`` is the
+    # canonical public spelling; the historical dataset label ``pinguo`` is
+    # normalized at the boundary for compatibility with existing tasks.
+    CLASS_NAMES = ["chengzi", "heweidao", "kele", "kouxiangtang", "maidong", "pingguo", "sanmingzhi", "shupian", "zhijin"]
+    ALIASES = {"pinguo": "pingguo"}
 
     def __init__(self, weights: Path, confidence: float = 0.65, device: str = "auto"):
         self.confidence = confidence
@@ -85,7 +89,7 @@ class YoloBackend:
             x0, y0, x1, y1 = map(int, box.xyxy[0].cpu().numpy())
             detections.append(
                 {
-                    "class": self.CLASS_NAMES[class_id],
+                    "class": self.ALIASES.get(self.CLASS_NAMES[class_id], self.CLASS_NAMES[class_id]),
                     "x": (x0 + x1) // 2,
                     "y": (y0 + y1) // 2,
                     "w": x1 - x0,

@@ -8,6 +8,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry, Path
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import String
 
 
 class State(Enum):
@@ -23,12 +24,13 @@ class UnifiedNavigationNode(Node):
         self.max_angular = self.declare_parameter('max_angular_speed', 0.8).value
         self.rejoin_tolerance = self.declare_parameter('rejoin_tolerance', 0.30).value
         self.scan_timeout = self.declare_parameter('scan_timeout', 0.25).value
-        self.state, self.scan, self.odom, self.global_path = State.FOLLOW, None, None, None
+        self.state, self.scan, self.odom, self.global_path = State.ESTOP, None, None, None
         self.last_scan = self.get_clock().now()
         self.create_subscription(LaserScan, '/slamware_ros_sdk_server_node/scan', self.on_scan, 10)
         self.create_subscription(Odometry, '/slamware_ros_sdk_server_node/odom', self.on_odom, 10)
         self.create_subscription(Path, '/plan', self.on_path, 10)
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.status_pub = self.create_publisher(String, '/unified_nav/status', 10)
         self.create_timer(0.05, self.control_loop)
 
     def on_scan(self, msg): self.scan, self.last_scan = msg, self.get_clock().now()
@@ -42,6 +44,7 @@ class UnifiedNavigationNode(Node):
 
     def stop(self): self.cmd_pub.publish(Twist())
     def control_loop(self):
+        self.status_pub.publish(String(data=self.state.name))
         age = (self.get_clock().now() - self.last_scan).nanoseconds / 1e9
         d = self.min_distance()
         if age > self.scan_timeout or d <= self.d_stop:
@@ -50,6 +53,8 @@ class UnifiedNavigationNode(Node):
             self.stop()
             if age <= self.scan_timeout and d > self.d_stop + 0.10: self.state = State.DECIDE
             return
+        if self.odom is None or self.global_path is None:
+            self.stop(); return
         if self.state == State.FOLLOW and d <= self.d_avoid: self.state = State.DECIDE
         if self.state == State.DECIDE:
             self.state = State.AVOID if d > self.d_stop else State.ESTOP
@@ -65,6 +70,10 @@ class UnifiedNavigationNode(Node):
             return
         if self.state == State.RECOVERY: self.stop(); self.state = State.DECIDE; return
         cmd = Twist(); cmd.linear.x = self.max_speed; self.cmd_pub.publish(cmd)
+
+    def destroy_node(self):
+        self.stop()
+        super().destroy_node()
 
 
 def main():
