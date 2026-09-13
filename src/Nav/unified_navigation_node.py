@@ -24,6 +24,7 @@ class UnifiedNavigationNode(Node):
         self.max_speed = self.declare_parameter('max_linear_speed', 0.45).value
         self.max_angular = self.declare_parameter('max_angular_speed', 0.8).value
         self.rejoin_tolerance = self.declare_parameter('rejoin_tolerance', 0.30).value
+        self.yaw_tolerance = self.declare_parameter('yaw_tolerance', 0.12).value
         self.scan_timeout = self.declare_parameter('scan_timeout', 0.25).value
         self.state, self.scan, self.odom, self.global_path = State.ESTOP, None, None, None
         self.last_scan = self.get_clock().now()
@@ -67,6 +68,9 @@ class UnifiedNavigationNode(Node):
         target_yaw=2.0*math.atan2(self.goal_pose.pose.orientation.z,self.goal_pose.pose.orientation.w)
         err=(math.atan2(dy,dx)-yaw+math.pi)%(2*math.pi)-math.pi
         if dist < self.rejoin_tolerance:
+            yaw_err=(target_yaw-yaw+math.pi)%(2*math.pi)-math.pi
+            if abs(yaw_err) > self.yaw_tolerance:
+                cmd=Twist(); cmd.angular.z=max(-self.max_angular,min(self.max_angular,1.8*yaw_err)); self.cmd_pub.publish(cmd); return
             self.stop(); self.status_pub.publish(String(data='ARRIVED')); self.goal_pose=None; return
         if self.global_path is None:
             dx=self.goal_pose.pose.position.x-self.odom.pose.pose.position.x

@@ -75,7 +75,9 @@ class TaskManager(Node):
         if self.phase==Phase.PICK:
             if not self.picker: self.get_logger().error('arm_pick package unavailable'); self.phase=Phase.RECOVERY; return
             result=self.picker.pick(self.current['kind'])
-            if getattr(result,'success',False) and not getattr(result,'dry_run',False): self.phase=Phase.DELIVER
+            state=str(getattr(result,'state','')).lower(); message=str(getattr(result,'message','')).lower()
+            dry = bool(getattr(result,'dry_run',False)) or 'dry' in state or 'dry' in message
+            if getattr(result,'success',False) and not dry: self.phase=Phase.DELIVER
             else: self.phase=Phase.RECOVERY
             return
         if self.phase==Phase.DELIVER:
