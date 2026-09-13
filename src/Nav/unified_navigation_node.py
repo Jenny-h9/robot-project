@@ -6,6 +6,7 @@ from enum import Enum
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
@@ -31,11 +32,14 @@ class UnifiedNavigationNode(Node):
         self.create_subscription(Path, '/plan', self.on_path, 10)
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.status_pub = self.create_publisher(String, '/unified_nav/status', 10)
+        self.create_subscription(PoseStamped, '/unified_nav/goal_pose', self.on_goal, 10)
+        self.goal_pose = None
         self.create_timer(0.05, self.control_loop)
 
     def on_scan(self, msg): self.scan, self.last_scan = msg, self.get_clock().now()
     def on_odom(self, msg): self.odom = msg
     def on_path(self, msg): self.global_path = msg
+    def on_goal(self, msg): self.goal_pose = msg; self.state = State.FOLLOW
 
     def min_distance(self):
         if self.scan is None: return math.inf
@@ -53,8 +57,13 @@ class UnifiedNavigationNode(Node):
             self.stop()
             if age <= self.scan_timeout and d > self.d_stop + 0.10: self.state = State.DECIDE
             return
-        if self.odom is None or self.global_path is None:
+        if self.odom is None or self.goal_pose is None:
             self.stop(); return
+        if self.global_path is None:
+            dx=self.goal_pose.pose.position.x-self.odom.pose.pose.position.x
+            dy=self.goal_pose.pose.position.y-self.odom.pose.pose.position.y
+            if math.hypot(dx,dy) < self.rejoin_tolerance:
+                self.stop(); self.status_pub.publish(String(data='ARRIVED')); return
         if self.state == State.FOLLOW and d <= self.d_avoid: self.state = State.DECIDE
         if self.state == State.DECIDE:
             self.state = State.AVOID if d > self.d_stop else State.ESTOP
