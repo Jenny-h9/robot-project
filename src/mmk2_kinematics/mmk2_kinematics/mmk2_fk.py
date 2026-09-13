@@ -5,7 +5,11 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 
-DEFAULT_MODEL = Path(__file__).resolve().parents[1].parent / "share" / "mmk2_kinematics" / "models" / "mmk2_head_fk.xml"
+try:
+    from ament_index_python.packages import get_package_share_directory
+    DEFAULT_MODEL = Path(get_package_share_directory("mmk2_kinematics")) / "models" / "mmk2_head_fk.xml"
+except Exception:
+    DEFAULT_MODEL = Path(__file__).resolve().parents[1] / "models" / "mmk2_head_fk.xml"
 
 
 class MMK2FK:

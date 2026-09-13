@@ -24,7 +24,7 @@ class TaskManager(Node):
         self.create_subscription(String,'/supermarket_sorting/task',self.task_cb,10)
         self.create_subscription(Detection3DArray,'/kele/detections',self.detection_cb,10)
         self.nav_status = 'UNKNOWN'
-        self.create_subscription(String, '/unified_nav/status', lambda m: setattr(self, 'nav_status', m.data), 10)
+        self.create_subscription(String, '/unified_nav/status', self.nav_cb, 10)
         self.nav_goal=self.create_publisher(PoseStamped,'/unified_nav/goal_pose',10)
         self.spine=self.create_publisher(Float64MultiArray,'/spine_forward_position_controller/commands',10)
         self.scan_interval=float(self.declare_parameter('scan_interval', 1.5).value)
@@ -38,7 +38,15 @@ class TaskManager(Node):
             if task.get('kind') == 'pinguo': task['kind'] = 'pingguo'
         self.phase=Phase.PREPARE
     def detection_cb(self,msg): self.detections=msg; self.detection_stamp=self.get_clock().now()
+    def nav_cb(self,msg):
+        self.nav_status = msg.data
+        if msg.data in ('ARRIVED','SUCCEEDED','FAILED'):
+            self.goal_pending = False
     def goal(self,p):
+        if self.goal_pending:
+            return
+        self.nav_status = 'WAITING'
+        self.goal_pending = True
         g=PoseStamped(); g.header.frame_id='map'; g.header.stamp=self.get_clock().now().to_msg(); g.pose.position.x=p[0]
         g.pose.position.y=p[1]; g.pose.orientation.z=math.sin(p[2]/2); g.pose.orientation.w=math.cos(p[2]/2); self.nav_goal.publish(g)
     def loop(self):

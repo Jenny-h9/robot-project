@@ -50,7 +50,11 @@ if str(BASELINE_ROOT) not in sys.path:
 from mmk2_kinematics import MMK2FK
 from yolo_backend import YoloBackend
 
-DEFAULT_WEIGHTS = BASELINE_ROOT / "models" / "products_best.pt"
+try:
+    from ament_index_python.packages import get_package_share_directory
+    DEFAULT_WEIGHTS = Path(get_package_share_directory("nav")) / "models" / "products_best.pt"
+except Exception:
+    DEFAULT_WEIGHTS = BASELINE_ROOT / "models" / "products_best.pt"
 
 
 class KeleDetectNode(Node):
