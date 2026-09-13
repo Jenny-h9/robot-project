@@ -1,0 +1,5 @@
+path: D:/Dataset
+train: images/train
+val: images/val
+nc: 9
+names: [chengzi, heweidao, kele, kouxiangtang, maidong, pinguo, sanmingzhi, shupian, zhijin]
