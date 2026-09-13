@@ -59,11 +59,19 @@ class UnifiedNavigationNode(Node):
             return
         if self.odom is None or self.goal_pose is None:
             self.stop(); return
+        dx=self.goal_pose.pose.position.x-self.odom.pose.pose.position.x
+        dy=self.goal_pose.pose.position.y-self.odom.pose.pose.position.y
+        dist=math.hypot(dx,dy)
+        q=self.odom.pose.pose.orientation
+        yaw=math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))
+        target_yaw=2.0*math.atan2(self.goal_pose.pose.orientation.z,self.goal_pose.pose.orientation.w)
+        err=(math.atan2(dy,dx)-yaw+math.pi)%(2*math.pi)-math.pi
+        if dist < self.rejoin_tolerance:
+            self.stop(); self.status_pub.publish(String(data='ARRIVED')); self.goal_pose=None; return
         if self.global_path is None:
             dx=self.goal_pose.pose.position.x-self.odom.pose.pose.position.x
             dy=self.goal_pose.pose.position.y-self.odom.pose.pose.position.y
-            if math.hypot(dx,dy) < self.rejoin_tolerance:
-                self.stop(); self.status_pub.publish(String(data='ARRIVED')); return
+            pass
         if self.state == State.FOLLOW and d <= self.d_avoid: self.state = State.DECIDE
         if self.state == State.DECIDE:
             self.state = State.AVOID if d > self.d_stop else State.ESTOP
@@ -78,7 +86,9 @@ class UnifiedNavigationNode(Node):
             self.state = State.FOLLOW
             return
         if self.state == State.RECOVERY: self.stop(); self.state = State.DECIDE; return
-        cmd = Twist(); cmd.linear.x = self.max_speed; self.cmd_pub.publish(cmd)
+        cmd = Twist(); cmd.linear.x = min(self.max_speed, 0.6*dist) if abs(err)<1.0 else 0.0
+        cmd.angular.z = max(-self.max_angular, min(self.max_angular, 1.5*err))
+        self.cmd_pub.publish(cmd)
 
     def destroy_node(self):
         self.stop()

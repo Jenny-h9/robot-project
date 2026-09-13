@@ -47,10 +47,10 @@ BASELINE_ROOT = Path(__file__).resolve().parent
 if str(BASELINE_ROOT) not in sys.path:
     sys.path.insert(0, str(BASELINE_ROOT))
 
-from kinematics.mmk2_fk import MMK2FK
+from mmk2_kinematics import MMK2FK
 from yolo_backend import YoloBackend
 
-DEFAULT_WEIGHTS = BASELINE_ROOT / "weights" / "kele.pt"
+DEFAULT_WEIGHTS = BASELINE_ROOT / "models" / "products_best.pt"
 
 
 class KeleDetectNode(Node):

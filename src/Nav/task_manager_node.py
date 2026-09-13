@@ -44,7 +44,9 @@ class TaskManager(Node):
     def loop(self):
         if not self.tasks and self.phase not in (Phase.PREPARE,Phase.DONE): self.phase=Phase.DONE
         if self.phase==Phase.DONE: return
-        if self.phase==Phase.PREPARE: self.goal(self.cabinet); self.phase=Phase.SCAN; self.level=0; self.col=0; return
+        if self.phase==Phase.PREPARE:
+            if self.nav_status not in ('ARRIVED','SUCCEEDED'): self.goal(self.cabinet); return
+            self.phase=Phase.SCAN; self.level=0; self.col=0; return
         if self.phase==Phase.SCAN:
             if (self.get_clock().now()-self.last_scan_step).nanoseconds/1e9 < self.scan_interval: return
             self.last_scan_step=self.get_clock().now()
@@ -59,7 +61,9 @@ class TaskManager(Node):
         if self.phase==Phase.FETCH:
             known=[t for t in self.tasks if t.get('kind') in self.mapping]
             if not known: self.phase=Phase.RECOVERY; return
-            self.current=min(known,key=lambda t:self.mapping[t['kind']].get('cost',0.0)); self.goal(self.mapping[self.current['kind']]['pose']); self.phase=Phase.PICK; return
+            self.current=min(known,key=lambda t:self.mapping[t['kind']].get('cost',0.0))
+            if self.nav_status not in ('ARRIVED','SUCCEEDED'): self.goal(self.mapping[self.current['kind']]['pose']); return
+            self.phase=Phase.PICK; return
         if self.phase==Phase.PICK:
             if not self.picker: self.get_logger().error('arm_pick package unavailable'); self.phase=Phase.RECOVERY; return
             result=self.picker.pick(self.current['kind'])
@@ -67,7 +71,8 @@ class TaskManager(Node):
             else: self.phase=Phase.RECOVERY
             return
         if self.phase==Phase.DELIVER:
-            self.goal(self.b); self.tasks=[t for t in self.tasks if t is not self.current]; self.current=None
+            if self.nav_status not in ('ARRIVED','SUCCEEDED'): self.goal(self.b); return
+            self.tasks=[t for t in self.tasks if t is not self.current]; self.current=None
             self.phase=Phase.FETCH if self.tasks else Phase.DONE
         elif self.phase==Phase.RECOVERY: self.get_logger().warn('navigation/vision recovery required'); self.phase=Phase.SCAN
 
