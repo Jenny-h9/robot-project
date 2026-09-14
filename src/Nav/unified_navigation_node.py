@@ -11,7 +11,7 @@ from nav_msgs.msg import Odometry, Path
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 import tf2_ros
-from tf2_geometry_msgs import do_transform_pose
+from tf2_geometry_msgs import do_transform_pose_stamped
 
 
 class State(Enum):
@@ -48,7 +48,7 @@ class UnifiedNavigationNode(Node):
         if self.goal_pose.header.frame_id == 'odom': return self.goal_pose
         try:
             t=self.tf_buffer.lookup_transform('odom', self.goal_pose.header.frame_id, rclpy.time.Time())
-            return do_transform_pose(self.goal_pose,t)
+            return do_transform_pose_stamped(self.goal_pose,t)
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException): return None
 
     def min_distance(self):
@@ -69,7 +69,7 @@ class UnifiedNavigationNode(Node):
             self.state = State.ESTOP
         if self.state == State.ESTOP:
             self.stop()
-            if age <= self.scan_timeout and d > self.d_stop + 0.10: self.state = State.DECIDE
+            if age <= self.scan_timeout and d > self.d_stop + 0.10: self.state = State.FOLLOW
             return
         if self.odom is None or self.goal_pose is None:
             self.stop(); return
@@ -93,7 +93,9 @@ class UnifiedNavigationNode(Node):
             pass
         if self.state == State.FOLLOW and d <= self.d_avoid: self.state = State.DECIDE
         if self.state == State.DECIDE:
-            self.state = State.AVOID if d > self.d_stop else State.ESTOP
+            if d <= self.d_stop: self.state = State.ESTOP
+            elif d <= self.d_avoid: self.state = State.AVOID
+            else: self.state = State.FOLLOW
         if self.state == State.AVOID:
             cmd = Twist(); cmd.linear.x = min(0.20, self.max_speed); cmd.angular.z = 0.45
             self.cmd_pub.publish(cmd)

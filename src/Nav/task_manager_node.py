@@ -31,6 +31,7 @@ class TaskManager(Node):
         self.scan_interval=float(self.declare_parameter('scan_interval', 1.5).value)
         self.last_scan_step=self.get_clock().now()
         self.scan_goal_pending=False
+        self.height_pending=False
         self.create_timer(.2,self.loop)
         self.picker=ArmPicker(self) if ArmPicker else None
 
@@ -59,6 +60,9 @@ class TaskManager(Node):
             self.phase=Phase.SCAN; self.level=0; self.col=0; return
         if self.phase==Phase.SCAN:
             if self.level >= len(self.scan_height): self.phase=Phase.FETCH; return
+            if not self.height_pending:
+                self.spine.publish(Float64MultiArray(data=[self.scan_height[self.level]])); self.height_pending=True; self.last_scan_step=self.get_clock().now(); return
+            if (self.get_clock().now()-self.last_scan_step).nanoseconds/1e9 < 1.0: return
             if not self.scan_goal_pending:
                 idx=self.col if self.level % 2 == 0 else 14-self.col
                 self.goal((self.shelf_x[idx],2.60,math.pi/2)); self.scan_goal_pending=True; return
@@ -70,7 +74,7 @@ class TaskManager(Node):
             if self.detections and self.detection_stamp and (self.get_clock().now()-self.detection_stamp).nanoseconds < 500000000:
                 self.mapping.update(self.extract_mapping(self.detections))
             if self.col>=15:
-                self.level += 1; self.col=0
+                self.level += 1; self.col=0; self.height_pending=False
                 if self.level>=len(self.scan_height): self.phase=Phase.FETCH
             return
         if self.phase==Phase.FETCH:
