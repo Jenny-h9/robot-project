@@ -31,7 +31,7 @@ class TaskManager(Node):
         self.scan_interval=float(self.declare_parameter('scan_interval', 1.5).value)
         self.last_scan_step=self.get_clock().now()
         self.scan_goal_pending=False
-        self.expected_goal_id = 0; self.completed_goal_id = 0
+        self.expected_goal_id = 0; self.completed_goal_id = 0; self.phase_goal_id = {}
         self.height_pending=False
         self.create_timer(.2,self.loop)
         self.picker=ArmPicker(self) if ArmPicker else None
@@ -92,7 +92,8 @@ class TaskManager(Node):
             known=[t for t in self.tasks if t.get('kind') in self.mapping]
             if not known: self.phase=Phase.RECOVERY; return
             self.current=min(known,key=lambda t:self.mapping[t['kind']].get('cost',0.0))
-            if self.nav_status not in ('ARRIVED','SUCCEEDED'): self.goal(self.mapping[self.current['kind']]['pose']); return
+            if self.phase_goal_id.get('fetch') is None: self.goal(self.mapping[self.current['kind']]['pose']); self.phase_goal_id['fetch']=self.expected_goal_id; return
+            if self.completed_goal_id != self.phase_goal_id['fetch']: return
             self.phase=Phase.PICK; return
         if self.phase==Phase.PICK:
             if not self.picker: self.get_logger().error('arm_pick package unavailable'); self.phase=Phase.RECOVERY; return
@@ -103,7 +104,8 @@ class TaskManager(Node):
             else: self.phase=Phase.RECOVERY
             return
         if self.phase==Phase.DELIVER:
-            if self.nav_status not in ('ARRIVED','SUCCEEDED'): self.goal(self.b); return
+            if self.phase_goal_id.get('deliver') is None: self.goal(self.b); self.phase_goal_id['deliver']=self.expected_goal_id; return
+            if self.completed_goal_id != self.phase_goal_id['deliver']: return
             self.tasks=[t for t in self.tasks if t is not self.current]; self.current=None
             self.phase=Phase.FETCH if self.tasks else Phase.DONE
         elif self.phase==Phase.RECOVERY: self.get_logger().warn('navigation/vision recovery required'); self.phase=Phase.SCAN
@@ -121,3 +123,4 @@ class TaskManager(Node):
 def main():
     rclpy.init(); n=TaskManager(); rclpy.spin(n); n.destroy_node(); rclpy.shutdown()
 if __name__=='__main__': main()
+
