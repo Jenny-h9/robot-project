@@ -36,8 +36,12 @@ class TaskManager(Node):
         self.create_timer(.2,self.loop)
         self.picker=ArmPicker(self) if ArmPicker else None
 
+    def _clear_phase_goal(self, name):
+        self.phase_goal_id.pop(name, None)
+
     def task_cb(self,msg):
         data=json.loads(msg.data); self.tasks=[dict(x) for x in data.get('targets',[])]
+        self.phase_goal_id.clear(); self.goal_pending=False; self.completed_goal_id=0; self.current=None; self.scan_goal_pending=False; self.height_pending=False; self.mapping.clear()
         for task in self.tasks:
             if task.get('kind') == 'pinguo': task['kind'] = 'pingguo'
         self.phase=Phase.PREPARE
@@ -67,7 +71,9 @@ class TaskManager(Node):
         if not self.tasks and self.phase not in (Phase.PREPARE,Phase.DONE): self.phase=Phase.DONE
         if self.phase==Phase.DONE: return
         if self.phase==Phase.PREPARE:
-            if self.nav_status not in ('ARRIVED','SUCCEEDED'): self.goal(self.cabinet); return
+            if self.phase_goal_id.get('prepare') is None: self.goal(self.cabinet); self.phase_goal_id['prepare']=self.expected_goal_id; return
+            if self.completed_goal_id != self.phase_goal_id['prepare']: return
+            self._clear_phase_goal('prepare')
             self.phase=Phase.SCAN; self.level=0; self.col=0; return
         if self.phase==Phase.SCAN:
             if self.level >= len(self.scan_height): self.phase=Phase.FETCH; return
@@ -123,4 +129,6 @@ class TaskManager(Node):
 def main():
     rclpy.init(); n=TaskManager(); rclpy.spin(n); n.destroy_node(); rclpy.shutdown()
 if __name__=='__main__': main()
+
+
 
