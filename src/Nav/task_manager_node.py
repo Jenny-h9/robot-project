@@ -82,10 +82,10 @@ class TaskManager(Node):
             if (self.get_clock().now()-self.last_scan_step).nanoseconds/1e9 < 1.0: return
             if not self.scan_goal_pending:
                 idx=self.col if self.level % 2 == 0 else 14-self.col
-                self.goal((self.shelf_x[idx],2.60,math.pi/2)); self.scan_goal_pending=True; return
-            if self.nav_status not in ('ARRIVED','SUCCEEDED'): return
+                self.goal((self.shelf_x[idx],2.60,math.pi/2)); self.phase_goal_id['scan']=self.expected_goal_id; self.scan_goal_pending=True; return
+            if self.completed_goal_id != self.phase_goal_id.get('scan'): return
             if (self.get_clock().now()-self.last_scan_step).nanoseconds/1e9 < self.scan_interval: return
-            self.last_scan_step=self.get_clock().now(); self.scan_goal_pending=False
+            self.last_scan_step=self.get_clock().now(); self.scan_goal_pending=False; self._clear_phase_goal('scan')
             self.spine.publish(Float64MultiArray(data=[self.scan_height[self.level]]))
             self.col += 1
             if self.detections and self.detection_stamp and (self.get_clock().now()-self.detection_stamp).nanoseconds < 500000000:
@@ -100,7 +100,7 @@ class TaskManager(Node):
             self.current=min(known,key=lambda t:self.mapping[t['kind']].get('cost',0.0))
             if self.phase_goal_id.get('fetch') is None: self.goal(self.mapping[self.current['kind']]['pose']); self.phase_goal_id['fetch']=self.expected_goal_id; return
             if self.completed_goal_id != self.phase_goal_id['fetch']: return
-            self.phase=Phase.PICK; return
+            self._clear_phase_goal('fetch'); self.phase=Phase.PICK; return
         if self.phase==Phase.PICK:
             if not self.picker: self.get_logger().error('arm_pick package unavailable'); self.phase=Phase.RECOVERY; return
             result=self.picker.pick(self.current['kind'])
@@ -113,7 +113,7 @@ class TaskManager(Node):
             if self.phase_goal_id.get('deliver') is None: self.goal(self.b); self.phase_goal_id['deliver']=self.expected_goal_id; return
             if self.completed_goal_id != self.phase_goal_id['deliver']: return
             self.tasks=[t for t in self.tasks if t is not self.current]; self.current=None
-            self.phase=Phase.FETCH if self.tasks else Phase.DONE
+            self._clear_phase_goal('deliver'); self.phase=Phase.FETCH if self.tasks else Phase.DONE
         elif self.phase==Phase.RECOVERY: self.get_logger().warn('navigation/vision recovery required'); self.phase=Phase.SCAN
 
     def extract_mapping(self,msg):
