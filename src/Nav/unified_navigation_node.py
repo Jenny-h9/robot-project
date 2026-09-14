@@ -10,6 +10,8 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
+import tf2_ros
+from tf2_geometry_msgs import do_transform_pose
 
 
 class State(Enum):
@@ -35,12 +37,19 @@ class UnifiedNavigationNode(Node):
         self.status_pub = self.create_publisher(String, '/unified_nav/status', 10)
         self.create_subscription(PoseStamped, '/unified_nav/goal_pose', self.on_goal, 10)
         self.goal_pose = None
+        self.tf_buffer = tf2_ros.Buffer(); self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         self.create_timer(0.05, self.control_loop)
 
     def on_scan(self, msg): self.scan, self.last_scan = msg, self.get_clock().now()
     def on_odom(self, msg): self.odom = msg
     def on_path(self, msg): self.global_path = msg
     def on_goal(self, msg): self.goal_pose = msg; self.state = State.FOLLOW
+    def goal_in_odom(self):
+        if self.goal_pose.header.frame_id == 'odom': return self.goal_pose
+        try:
+            t=self.tf_buffer.lookup_transform('odom', self.goal_pose.header.frame_id, rclpy.time.Time())
+            return do_transform_pose(self.goal_pose,t)
+        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException): return None
 
     def min_distance(self):
         if self.scan is None: return math.inf
@@ -49,7 +58,11 @@ class UnifiedNavigationNode(Node):
 
     def stop(self): self.cmd_pub.publish(Twist())
     def control_loop(self):
-        self.status_pub.publish(String(data=self.state.name))
+        if self.goal_pose is None:
+            self.status_pub.publish(String(data='IDLE'))
+            self.stop()
+            return
+        self.status_pub.publish(String(data='MOVING' if self.state != State.ESTOP else 'EMERGENCY_STOP'))
         age = (self.get_clock().now() - self.last_scan).nanoseconds / 1e9
         d = self.min_distance()
         if age > self.scan_timeout or d <= self.d_stop:
@@ -60,12 +73,14 @@ class UnifiedNavigationNode(Node):
             return
         if self.odom is None or self.goal_pose is None:
             self.stop(); return
-        dx=self.goal_pose.pose.position.x-self.odom.pose.pose.position.x
-        dy=self.goal_pose.pose.position.y-self.odom.pose.pose.position.y
+        goal=self.goal_in_odom()
+        if goal is None: self.stop(); self.status_pub.publish(String(data='TF_UNAVAILABLE')); return
+        dx=goal.pose.position.x-self.odom.pose.pose.position.x
+        dy=goal.pose.position.y-self.odom.pose.pose.position.y
         dist=math.hypot(dx,dy)
         q=self.odom.pose.pose.orientation
         yaw=math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))
-        target_yaw=2.0*math.atan2(self.goal_pose.pose.orientation.z,self.goal_pose.pose.orientation.w)
+        target_yaw=2.0*math.atan2(goal.pose.orientation.z,goal.pose.orientation.w)
         err=(math.atan2(dy,dx)-yaw+math.pi)%(2*math.pi)-math.pi
         if dist < self.rejoin_tolerance:
             yaw_err=(target_yaw-yaw+math.pi)%(2*math.pi)-math.pi

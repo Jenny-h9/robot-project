@@ -21,6 +21,7 @@ class TaskManager(Node):
         self.scan_speed=float(self.declare_parameter('scan_speed', .18).value)
         self.scan_height=[float(x) for x in self.declare_parameter('scan_heights',[.30,.75,1.20]).value]
         self.a=(1.920,-3.170,0.0); self.cabinet=(1.920,2.60,math.pi/2); self.b=(-1.88,-2.80,-math.pi/2)
+        self.shelf_x=[-1.955,-1.735,-1.515,-1.070,-.850,-.630,-.185,.035,.255,.700,.920,1.140,1.585,1.805,2.025]
         self.create_subscription(String,'/supermarket_sorting/task',self.task_cb,10)
         self.create_subscription(Detection3DArray,'/kele/detections',self.detection_cb,10)
         self.nav_status = 'UNKNOWN'
@@ -29,6 +30,7 @@ class TaskManager(Node):
         self.spine=self.create_publisher(Float64MultiArray,'/spine_forward_position_controller/commands',10)
         self.scan_interval=float(self.declare_parameter('scan_interval', 1.5).value)
         self.last_scan_step=self.get_clock().now()
+        self.scan_goal_pending=False
         self.create_timer(.2,self.loop)
         self.picker=ArmPicker(self) if ArmPicker else None
 
@@ -56,13 +58,18 @@ class TaskManager(Node):
             if self.nav_status not in ('ARRIVED','SUCCEEDED'): self.goal(self.cabinet); return
             self.phase=Phase.SCAN; self.level=0; self.col=0; return
         if self.phase==Phase.SCAN:
+            if self.level >= len(self.scan_height): self.phase=Phase.FETCH; return
+            if not self.scan_goal_pending:
+                idx=self.col if self.level % 2 == 0 else 14-self.col
+                self.goal((self.shelf_x[idx],2.60,math.pi/2)); self.scan_goal_pending=True; return
+            if self.nav_status not in ('ARRIVED','SUCCEEDED'): return
             if (self.get_clock().now()-self.last_scan_step).nanoseconds/1e9 < self.scan_interval: return
-            self.last_scan_step=self.get_clock().now()
+            self.last_scan_step=self.get_clock().now(); self.scan_goal_pending=False
             self.spine.publish(Float64MultiArray(data=[self.scan_height[self.level]]))
             self.col += 1
             if self.detections and self.detection_stamp and (self.get_clock().now()-self.detection_stamp).nanoseconds < 500000000:
                 self.mapping.update(self.extract_mapping(self.detections))
-            if self.col>=5:
+            if self.col>=15:
                 self.level += 1; self.col=0
                 if self.level>=len(self.scan_height): self.phase=Phase.FETCH
             return
@@ -92,7 +99,8 @@ class TaskManager(Node):
             if not det.results: continue
             r=det.results[0]; kind=str(r.hypothesis.class_id)
             p=r.pose.pose.position
-            out[kind]={'pose': (p.x,p.y,0.0), 'cost': 0.0, 'confidence': float(r.hypothesis.score)}
+            x=min(self.shelf_x, key=lambda v: abs(v-float(p.x)))
+            out[kind]={'pose': (x,2.60,math.pi/2), 'cost': abs(x-self.a[0]), 'confidence': float(r.hypothesis.score)}
         return out
 
 def main():
