@@ -1,0 +1,5 @@
+path: .
+train: images/train
+val: images/val
+nc: 9
+names: [chengzi, heweidao, kele, kouxiangtang, maidong, pingguo, sanmingzhi, shupian, zhijin]
