@@ -37,13 +37,16 @@ class UnifiedNavigationNode(Node):
         self.status_pub = self.create_publisher(String, '/unified_nav/status', 10)
         self.create_subscription(PoseStamped, '/unified_nav/goal_pose', self.on_goal, 10)
         self.goal_pose = None
+        self.goal_id = 0
+        self.latched_status = 'IDLE'
         self.tf_buffer = tf2_ros.Buffer(); self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         self.create_timer(0.05, self.control_loop)
 
     def on_scan(self, msg): self.scan, self.last_scan = msg, self.get_clock().now()
     def on_odom(self, msg): self.odom = msg
     def on_path(self, msg): self.global_path = msg
-    def on_goal(self, msg): self.goal_pose = msg; self.state = State.FOLLOW
+    def on_goal(self, msg):
+        self.goal_id += 1; self.goal_pose = msg; self.state = State.FOLLOW; self.latched_status = 'MOVING'
     def goal_in_odom(self):
         if self.goal_pose.header.frame_id == 'odom': return self.goal_pose
         try:
@@ -59,10 +62,10 @@ class UnifiedNavigationNode(Node):
     def stop(self): self.cmd_pub.publish(Twist())
     def control_loop(self):
         if self.goal_pose is None:
-            self.status_pub.publish(String(data='IDLE'))
+            self.status_pub.publish(String(data=self.latched_status))
             self.stop()
             return
-        self.status_pub.publish(String(data='MOVING' if self.state != State.ESTOP else 'EMERGENCY_STOP'))
+        self.status_pub.publish(String(data=f'MOVING:{self.goal_id}' if self.state != State.ESTOP else 'EMERGENCY_STOP'))
         age = (self.get_clock().now() - self.last_scan).nanoseconds / 1e9
         d = self.min_distance()
         if age > self.scan_timeout or d <= self.d_stop:
@@ -86,7 +89,7 @@ class UnifiedNavigationNode(Node):
             yaw_err=(target_yaw-yaw+math.pi)%(2*math.pi)-math.pi
             if abs(yaw_err) > self.yaw_tolerance:
                 cmd=Twist(); cmd.angular.z=max(-self.max_angular,min(self.max_angular,1.8*yaw_err)); self.cmd_pub.publish(cmd); return
-            self.stop(); self.status_pub.publish(String(data='ARRIVED')); self.goal_pose=None; return
+            self.stop(); self.latched_status=f'ARRIVED:{self.goal_id}'; self.status_pub.publish(String(data=self.latched_status)); self.goal_pose=None; return
         if self.global_path is None:
             dx=self.goal_pose.pose.position.x-self.odom.pose.pose.position.x
             dy=self.goal_pose.pose.position.y-self.odom.pose.pose.position.y

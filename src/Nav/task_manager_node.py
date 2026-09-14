@@ -31,6 +31,7 @@ class TaskManager(Node):
         self.scan_interval=float(self.declare_parameter('scan_interval', 1.5).value)
         self.last_scan_step=self.get_clock().now()
         self.scan_goal_pending=False
+        self.expected_goal_id = 0; self.completed_goal_id = 0
         self.height_pending=False
         self.create_timer(.2,self.loop)
         self.picker=ArmPicker(self) if ArmPicker else None
@@ -43,11 +44,21 @@ class TaskManager(Node):
     def detection_cb(self,msg): self.detections=msg; self.detection_stamp=self.get_clock().now()
     def nav_cb(self,msg):
         self.nav_status = msg.data
-        if msg.data in ('ARRIVED','SUCCEEDED','FAILED'):
+        if ':' in msg.data:
+            status, raw_id = msg.data.split(':', 1)
+            try: goal_id=int(raw_id)
+            except ValueError: goal_id=-1
+            if status == 'ARRIVED' and goal_id == self.expected_goal_id:
+                self.completed_goal_id=goal_id
+                self.nav_status='ARRIVED'
+            else: self.nav_status=status
+        if self.nav_status in ('ARRIVED','SUCCEEDED','FAILED'):
             self.goal_pending = False
     def goal(self,p):
         if self.goal_pending:
             return
+        self.expected_goal_id += 1
+        self.completed_goal_id = 0
         self.nav_status = 'WAITING'
         self.goal_pending = True
         g=PoseStamped(); g.header.frame_id='map'; g.header.stamp=self.get_clock().now().to_msg(); g.pose.position.x=p[0]
